@@ -1,0 +1,3 @@
+- [x] Enable accounts and private saved data.
+- [ ] Build hero, portal, analyzer, results, batches, suppliers, and explainability views.
+- [ ] Verify the experience across desktop and mobile.
