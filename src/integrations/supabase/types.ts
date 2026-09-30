@@ -14,7 +14,113 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      analyses: {
+        Row: {
+          created_at: string
+          id: string
+          input_mode: string
+          inputs: Json
+          product_name: string
+          recommendation: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          input_mode: string
+          inputs?: Json
+          product_name: string
+          recommendation?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          input_mode?: string
+          inputs?: Json
+          product_name?: string
+          recommendation?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      batches: {
+        Row: {
+          analysis_id: string | null
+          created_at: string
+          destination: string
+          dispatched_at: string
+          expires_at: string
+          id: string
+          packaging: string
+          passport: Json
+          product_name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          analysis_id?: string | null
+          created_at?: string
+          destination?: string
+          dispatched_at?: string
+          expires_at: string
+          id?: string
+          packaging: string
+          passport?: Json
+          product_name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          analysis_id?: string | null
+          created_at?: string
+          destination?: string
+          dispatched_at?: string
+          expires_at?: string
+          id?: string
+          packaging?: string
+          passport?: Json
+          product_name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "batches_analysis_id_fkey"
+            columns: ["analysis_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          account_type: string
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          account_type?: string
+          created_at?: string
+          display_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          account_type?: string
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
