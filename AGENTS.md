@@ -8,3 +8,6 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Keep recommendation calculations in `src/lib/packaging.ts` as transparent estimates; no certified laboratory or live ICMR data is bundled.
+- Store signed-in analyses and shipment batches in owner-scoped Lovable Cloud tables; guest analyses remain in-session only.
