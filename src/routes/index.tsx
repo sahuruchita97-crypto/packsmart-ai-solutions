@@ -1,24 +1,223 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from '@tanstack/react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, ArrowLeft, ArrowUpRight, Check, ChevronDown, CircleHelp, Download, FileText, FlaskConical, Leaf, LockKeyhole, Menu, Package, Plus, QrCode, Search, ShieldCheck, Sparkles, Sprout, Thermometer, Truck, UploadCloud, UserRound, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { supabase } from '@/integrations/supabase/client';
+import { foods, recommend, type Food, type Inputs } from '@/lib/packaging';
+import hero from '@/assets/packsmart-hero.jpg';
+import type { User } from '@supabase/supabase-js';
+import type { Tables } from '@/integrations/supabase/types';
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
-export const Route = createFileRoute("/")({
-  component: Index,
+export const Route = createFileRoute('/')({
+  head: () => ({ meta: [
+    { title: 'PackSmart AI — Intelligent Food Packaging' },
+    { name: 'description', content: 'Explore food-specific packaging films, barrier targets, sustainable alternatives and indicative Indian manufacturing costs.' },
+    { property: 'og:title', content: 'PackSmart AI — Intelligent Food Packaging' },
+    { property: 'og:description', content: 'Find a smarter package for every food product with film recommendations, barrier targets and eco alternatives.' },
+    { property: 'og:type', content: 'website' }, { name: 'twitter:card', content: 'summary_large_image' },
+  ] }), component: PackSmart,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
+type View = 'home' | 'analyzer' | 'batches' | 'suppliers' | 'xai';
+type Mode = 'search' | 'farmer' | 'lab';
+type Result = ReturnType<typeof recommend>;
+type Analysis = Tables<'analyses'>;
+type Batch = Tables<'batches'>;
+const nav: { id: View; label: string }[] = [{ id: 'analyzer', label: 'Analyzer' }, { id: 'batches', label: 'Batches' }, { id: 'suppliers', label: 'Suppliers' }, { id: 'xai', label: 'Explainable AI' }];
+const formatMoney = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+
+function PackSmart() {
+  const [view, setView] = useState<View>('home');
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [portal, setPortal] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [guest, setGuest] = useState(false);
+  const [mode, setMode] = useState<Mode>('search');
+  const [query, setQuery] = useState('');
+  const [food, setFood] = useState<Food>(foods[0]);
+  const [productState, setProductState] = useState('Fresh');
+  const [oil, setOil] = useState('Low');
+  const [crisp, setCrisp] = useState('No');
+  const [temp, setTemp] = useState(25);
+  const [humidity, setHumidity] = useState(60);
+  const [transit, setTransit] = useState<Inputs['transit']>('Regional');
+  const [result, setResult] = useState<Result | null>(null);
+  const [resultFood, setResultFood] = useState<Food | null>(null);
+  const [eco, setEco] = useState(false);
+  const [analyses, setAnalyses] = useState<Analysis[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [passport, setPassport] = useState<Batch | null>(null);
+  const [passportImage, setPassportImage] = useState('');
+  const [batchDialog, setBatchDialog] = useState(false);
+  const [destination, setDestination] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [labFile, setLabFile] = useState<File | null>(null);
+  const [labText, setLabText] = useState('');
+  const [readingLab, setReadingLab] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const filtered = useMemo(() => foods.filter(f => `${f.name} ${f.category}`.toLowerCase().includes(query.toLowerCase())), [query]);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => setUser(session?.user ?? null));
+    return () => subscription.unsubscribe();
+  }, []);
+  useEffect(() => { if (user) void loadRecords(); else { setAnalyses([]); setBatches([]); } }, [user?.id]);
+  async function loadRecords() {
+    const [a, b] = await Promise.all([supabase.from('analyses').select('*').order('created_at', { ascending: false }), supabase.from('batches').select('*').order('created_at', { ascending: false })]);
+    if (a.error || b.error) { setNotice('Could not load saved work. Please try again.'); return; }
+    setAnalyses(a.data ?? []); setBatches(b.data ?? []);
+  }
+  function go(next: View) { setView(next); setMobileMenu(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  function chosenFood() {
+    if (mode !== 'farmer') return food;
+    const base = productState === 'Fresh' ? foods[0] : oil === 'High' ? foods[2] : crisp === 'Yes' ? foods[1] : foods[3];
+    return { ...base, name: productState === 'Fresh' ? 'Fresh produce' : crisp === 'Yes' ? 'Crisp food product' : oil === 'High' ? 'Oil-rich food product' : 'Dry food product' };
+  }
+  async function analyze() {
+    const selected = chosenFood();
+    const inputs = { food: selected, temperature: temp, humidity, transit };
+    const recommendation = recommend(inputs);
+    setResultFood(selected); setResult(recommendation); setEco(false); setView('analyzer'); window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (user) {
+      const { error } = await supabase.from('analyses').insert({ user_id: user.id, product_name: selected.name, input_mode: mode, inputs: inputs as unknown as Analysis['inputs'], recommendation: recommendation as unknown as Analysis['recommendation'] });
+      if (error) setNotice('Analysis ready, but it could not be saved.'); else void loadRecords();
+    }
+  }
+  async function createBatch() {
+    if (!result || !resultFood) return;
+    if (!user) { setBatchDialog(false); setPortal(true); setNotice('Sign in to save a shipment and create its passport.'); return; }
+    setSaving(true);
+    const expiry = new Date(Date.now() + (eco ? result.ecoShelfDays : result.shelfDays) * 86400000).toISOString();
+    const { data, error } = await supabase.from('batches').insert({ user_id: user.id, product_name: resultFood.name, destination, expires_at: expiry, packaging: eco ? result.ecoStructure : result.structure, passport: { score: result.score, otr: result.otr, wvtr: result.wvtr, eco, generatedAt: new Date().toISOString() } }).select().single();
+    setSaving(false);
+    if (error || !data) { setNotice('Shipment could not be saved. Please try again.'); return; }
+    setBatchDialog(false); setDestination(''); void loadRecords(); void showPassport(data);
+  }
+  async function showPassport(batch: Batch) {
+    setPassport(batch);
+    const QRCode = await import('qrcode');
+    const content = JSON.stringify({ passport: batch.id, product: batch.product_name, packaging: batch.packaging, dispatched: batch.dispatched_at, bestBefore: batch.expires_at, destination: batch.destination });
+    setPassportImage(await QRCode.toDataURL(content, { width: 320, margin: 2 }));
+  }
+  async function readFile(file: File) {
+    setLabFile(file); setReadingLab(true); setLabText('');
+    try {
+      let text = '';
+      if (file.type === 'application/pdf') {
+        const pdfjs = await import('pdfjs-dist');
+        pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+        const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+        for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+          const page = await pdf.getPage(i); const content = await page.getTextContent();
+          text += content.items.map(item => 'str' in item ? item.str : '').join(' ') + '\n';
+        }
+        if (!text.trim()) throw new Error('This PDF has no selectable text. Please use an image instead.');
+      } else {
+        const { recognize } = await import('tesseract.js');
+        text = (await recognize(file, 'eng')).data.text;
+      }
+      setLabText(text.trim());
+      const aw = text.match(/(?:water activity|\baw\b)\s*[:=]?\s*(0\.\d+)/i);
+      const fat = text.match(/(?:fat|lipid)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+      const ph = text.match(/\bpH\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+      setFood({ ...food, name: file.name.replace(/\.[^.]+$/, ''), aw: aw ? Number(aw[1]) : food.aw, fat: fat ? Number(fat[1]) : food.fat, ph: ph ? Number(ph[1]) : food.ph });
+      setNotice('Report read. Review the detected values before analysis.');
+    } catch (e) { setNotice(e instanceof Error ? e.message : 'Could not read this report.'); }
+    finally { setReadingLab(false); }
+  }
+  async function exportPdf() {
+    if (!result || !resultFood) return;
+    const { jsPDF } = await import('jspdf'); const doc = new jsPDF();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.text('PackSmart AI | Packaging Blueprint', 18, 24);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+    const lines = [
+      `Product: ${resultFood.name}`, `Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      `Estimated compatibility: ${result.score}%`, `Film: ${eco ? result.ecoStructure : result.structure}`,
+      `Target OTR: ${result.otr}`, `Target WVTR: ${result.wvtr}`, `Thickness: ${result.thickness}`,
+      `Estimated shelf life: ${eco ? result.ecoShelfDays : result.shelfDays} days`,
+      `Indicative cost per 1,000 units: Rs. ${(eco ? result.ecoCost : result.cost).toLocaleString('en-IN')}`,
+      `Storage: ${temp} C | Relative humidity: ${humidity}% | Transit: ${transit}`,
+      '', 'Planning estimate only. Validate against lab testing, migration rules,', 'food-contact regulations and supplier quotations before production.'
+    ]; lines.forEach((line, i) => doc.text(line, 18, 42 + i * 11));
+    doc.save(`packsmart-${resultFood.name.toLowerCase().replace(/\W+/g, '-')}.pdf`);
+  }
+  return <div className="min-h-screen bg-background">
+    <header className="sticky top-0 z-40 border-b border-border/70 bg-background/90 backdrop-blur-xl">
+      <div className="mx-auto grid h-[76px] max-w-[1400px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-5 md:flex md:px-10 lg:px-14">
+        <Button variant="ghost" className="w-fit min-w-0 gap-2 px-0 hover:bg-transparent" onClick={() => go('home')} aria-label="PackSmart AI home"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground"><Leaf className="size-5" /></span><span className="truncate font-display text-xl font-bold text-primary md:text-2xl">PackSmart <i className="font-normal">AI</i></span></Button>
+        <nav className="mx-auto hidden items-center gap-9 md:flex">{nav.map(n => <Button key={n.id} variant="ghost" className={`px-0 text-sm hover:bg-transparent ${view === n.id ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => go(n.id)}>{n.label}</Button>)}</nav>
+        <div className="flex shrink-0 items-center gap-2"><Button className="hidden rounded-full px-5 md:inline-flex" onClick={() => setPortal(true)}>{user ? 'My account' : 'Login / Portal'} <ArrowUpRight /></Button><Button variant="ghost" size="icon" className="md:hidden" aria-label="Open menu" onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X /> : <Menu />}</Button></div>
+      </div>
+      {mobileMenu && <nav className="grid gap-1 border-t border-border bg-background p-4 md:hidden">{nav.map(n => <Button key={n.id} variant="ghost" className="justify-start" onClick={() => go(n.id)}>{n.label}</Button>)}<Button onClick={() => { setPortal(true); setMobileMenu(false); }}>{user ? 'My account' : 'Login / Portal'} <ArrowRight /></Button></nav>}
+    </header>
+    {notice && <div role="status" className="fixed bottom-5 left-1/2 z-[80] flex w-[min(92vw,520px)] -translate-x-1/2 items-center justify-between gap-4 rounded-xl bg-primary px-5 py-3 text-sm text-primary-foreground shadow-xl">{notice}<Button variant="ghost" size="icon" aria-label="Dismiss message" className="text-primary-foreground hover:bg-primary-foreground/10" onClick={() => setNotice('')}><X /></Button></div>}
+    {view === 'home' && <>
+      <section className="hero-photo relative min-h-[650px] overflow-hidden md:min-h-[690px]">
+        <img src={hero} alt="Sustainable food packaging samples with fresh mangoes" width={1536} height={1024} className="sr-only" />
+        <div className="mx-auto flex min-h-[650px] max-w-[1400px] flex-col justify-center px-6 pb-40 pt-12 md:min-h-[690px] md:px-10 md:pb-20 lg:px-14">
+          <div className="max-w-[670px] reveal"><span className="inline-flex items-center rounded-full border border-sage/30 bg-secondary/80 px-4 py-2 text-[11px] font-bold uppercase tracking-[.17em] text-primary">✦ &nbsp; AI-powered packaging intelligence</span>
+            <h1 className="mt-7 font-display text-[48px] leading-[1.12] font-medium text-primary sm:text-[68px] lg:text-[80px]">The right package<br />for <i className="font-normal text-sage">every product.</i></h1>
+            <p className="mt-6 max-w-[490px] text-base leading-8 text-ink-soft md:text-lg">Food science meets thoughtful design. Discover protective films, smarter shelf life, and a lighter footprint for what you make.</p>
+            <div className="mt-9 flex flex-wrap items-center gap-3"><Button size="lg" className="h-13 rounded-full px-7" onClick={() => go('analyzer')}>Start analysis <ArrowRight /></Button><Button size="lg" variant="outline" className="h-13 rounded-full border-primary/20 bg-card/75 px-7" onClick={() => setPortal(true)}>Access portal <ArrowUpRight /></Button></div>
+            <p className="mt-7 flex items-center gap-2 text-xs font-medium text-muted-foreground"><ShieldCheck className="size-4 text-sage" /> Built for India's food innovators · SIH 2026 / MoFPI PS 26236</p>
+          </div>
+        </div>
+        <div className="glass float-card absolute bottom-7 right-5 hidden rounded-[20px] px-5 py-4 sm:block md:bottom-[135px] md:right-[8%]"><span className="text-xs text-muted-foreground">Packaging match</span><div className="mt-1 flex items-center gap-3 text-2xl font-bold text-primary"><span className="grid size-9 place-items-center rounded-full bg-secondary text-sage"><Check /></span>94% <span className="text-xs font-medium text-muted-foreground">compatibility</span></div></div>
+        <div className="glass absolute bottom-5 right-[25%] hidden rounded-[20px] px-5 py-4 lg:block"><span className="text-xs text-muted-foreground">Estimated shelf life</span><div className="mt-1 text-xl font-bold text-primary">+32% <span className="text-xs font-medium text-muted-foreground">with better protection</span></div></div>
+      </section>
+      <section className="border-t border-border bg-card py-16 md:py-20"><div className="mx-auto grid max-w-[1280px] gap-9 px-6 md:grid-cols-[1fr_1.5fr] md:gap-16 md:px-10"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">01 / From food to film</span><h2 className="mt-4 font-display text-4xl leading-tight text-primary md:text-5xl">Better protection begins with <i>understanding.</i></h2></div><div className="grid gap-5 sm:grid-cols-3">{[{ icon: FlaskConical, title: 'Know your food', text: 'Start with a commodity, simple answers, or a lab report.' }, { icon: Package, title: 'Find your film', text: 'Compare film structure, barrier targets and shelf life.' }, { icon: Sprout, title: 'Make it lighter', text: 'Explore bio-based alternatives and indicative costs.' }].map(x => <div key={x.title} className="border-t border-border pt-5"><x.icon className="size-6 text-sage" /><h3 className="mt-5 font-display text-xl text-primary">{x.title}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{x.text}</p></div>)}</div></div></section>
+    </>}
+    {view === 'analyzer' && <main className="mx-auto max-w-[1280px] px-5 py-9 md:px-10 md:py-14">
+      {!result ? <><div className="max-w-[800px]"><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">Product analyzer / 01</span><h1 className="mt-3 font-display text-4xl leading-tight text-primary md:text-6xl">Let's find your <i>perfect fit.</i></h1><p className="mt-4 text-ink-soft">Tell us about your food and its journey. We’ll turn the details into a packaging blueprint.</p></div>
+        <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,.8fr)]">
+          <div className="space-y-7"><section className="rounded-[20px] border border-border bg-card p-5 shadow-sm md:p-8"><div className="flex items-start gap-4"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-sm text-primary-foreground">1</span><div><h2 className="font-display text-2xl text-primary">Your product</h2><p className="mt-1 text-sm text-muted-foreground">Choose the path that feels right for you.</p></div></div>
+            <div className="mt-7 grid grid-cols-3 gap-2 rounded-xl bg-muted p-1.5">{([{ id: 'search', label: 'Food search', icon: Search }, { id: 'farmer', label: 'Simple guide', icon: Sprout }, { id: 'lab', label: 'Lab report', icon: FlaskConical }] as const).map(item => <Button key={item.id} variant={mode === item.id ? 'secondary' : 'ghost'} className={`h-auto min-h-12 flex-col gap-1 rounded-lg px-1 py-2 text-[11px] sm:flex-row sm:text-sm ${mode === item.id ? 'bg-card shadow-sm' : ''}`} onClick={() => setMode(item.id)}><item.icon className="size-4" />{item.label}</Button>)}</div>
+            {mode === 'search' && <div className="mt-7"><label className="text-sm font-semibold text-primary" htmlFor="food-search">Search food commodities</label><div className="relative mt-2"><Search className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><input id="food-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Try mangoes, makhana, pickle..." className="h-12 w-full rounded-xl border border-border bg-background pl-11 pr-4 outline-none focus:border-sage" /></div><div className="mt-4 grid gap-2 sm:grid-cols-2">{filtered.map(f => <Button key={f.name} variant="outline" onClick={() => setFood(f)} className={`h-auto min-h-20 justify-between whitespace-normal rounded-xl p-4 text-left ${food.name === f.name ? 'border-sage bg-secondary/50' : 'border-border'}`}><span className="min-w-0"><span className="block font-semibold text-primary">{f.name}</span><span className="mt-1 block text-xs font-normal text-muted-foreground">{f.description}</span></span>{food.name === f.name ? <Check className="text-sage" /> : <ArrowUpRight className="text-muted-foreground" />}</Button>)}</div>{filtered.length === 0 && <p className="mt-3 text-sm text-muted-foreground">No match yet. Try the simple guide instead.</p>}
+              <div className="mt-5 rounded-xl bg-muted p-4"><p className="text-xs font-bold uppercase tracking-widest text-sage">Illustrative food properties</p><div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">{[['Water activity', food.aw], ['Fat / lipid', `${food.fat}%`], ['pH', food.ph], ['Respiration', food.respiration ? `${food.respiration} mg/kg/h` : 'Low']].map(([k, v]) => <div key={k}><span className="block text-xs text-muted-foreground">{k}</span><strong className="text-primary">{v}</strong></div>)}</div></div></div>}
+            {mode === 'farmer' && <div className="mt-7 space-y-5">{[{ title: 'What is your product like?', value: productState, setter: setProductState, choices: ['Fresh', 'Dry', 'Processed'] }, { title: 'How much oil does it contain?', value: oil, setter: setOil, choices: ['Low', 'Medium', 'High'] }, { title: 'Should it stay crisp?', value: crisp, setter: setCrisp, choices: ['Yes', 'No'] }].map((q, i) => <div key={q.title}><p className="mb-3 text-sm font-semibold text-primary">{i + 1}. {q.title}</p><div className="flex flex-wrap gap-2">{q.choices.map(choice => <Button key={choice} variant={q.value === choice ? 'default' : 'outline'} className="rounded-full px-5" onClick={() => q.setter(choice)}>{choice}</Button>)}</div></div>)}</div>}
+            {mode === 'lab' && <div className="mt-7"><input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) void readFile(f); }} /><div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void readFile(f); }} className="grid min-h-48 place-items-center rounded-xl border-2 border-dashed border-sage/40 bg-muted p-5 text-center"><div><UploadCloud className="mx-auto size-8 text-sage" /><p className="mt-3 text-sm font-semibold text-primary">{readingLab ? 'Reading your report...' : labFile ? labFile.name : 'Drop your report here'}</p><p className="mt-1 text-xs text-muted-foreground">PDF, PNG or JPG · text is processed in your browser</p><Button variant="outline" className="mt-4 rounded-full" onClick={() => fileRef.current?.click()}>Browse file</Button></div></div>{labText && <div className="mt-4 rounded-xl bg-muted p-4"><p className="text-xs font-bold uppercase tracking-widest text-sage">Detected values · editable below</p><div className="mt-4 grid gap-3 sm:grid-cols-3">{(['aw','fat','ph'] as const).map(key => <label key={key} className="text-xs text-muted-foreground">{key === 'aw' ? 'Water activity' : key === 'fat' ? 'Fat / lipid %' : 'pH'}<input type="number" step="0.01" value={food[key]} onChange={e => setFood({ ...food, [key]: Number(e.target.value) })} className="mt-1 block h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-primary" /></label>)}</div><p className="mt-3 line-clamp-2 text-xs text-muted-foreground">{labText}</p></div>}</div>}
+          </section></div>
+          <div><section className="rounded-[20px] border border-border bg-card p-5 shadow-sm md:p-8"><div className="flex items-start gap-4"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-sm text-primary-foreground">2</span><div><h2 className="font-display text-2xl text-primary">The journey</h2><p className="mt-1 text-sm text-muted-foreground">Where and how will it travel?</p></div></div>
+            <div className="mt-8 space-y-8">{[{ label: 'Storage temperature', value: temp, set: setTemp, min: 10, max: 45, unit: '°C', icon: Thermometer }, { label: 'Relative humidity', value: humidity, set: setHumidity, min: 30, max: 90, unit: '%', icon: Leaf }].map(s => <div key={s.label}><div className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2 font-semibold text-primary"><s.icon className="size-4 text-sage" />{s.label}</span><strong className="text-lg text-primary">{s.value}{s.unit}</strong></div><input type="range" aria-label={s.label} min={s.min} max={s.max} value={s.value} onChange={e => s.set(Number(e.target.value))} className="range mt-4 w-full" /><div className="flex justify-between text-xs text-muted-foreground"><span>{s.min}{s.unit}</span><span>{s.max}{s.unit}</span></div></div>)}<div><p className="flex items-center gap-2 text-sm font-semibold text-primary"><Truck className="size-4 text-sage" /> Transit distance</p><div className="mt-3 grid grid-cols-3 gap-2">{(['Local','Regional','Long distance'] as const).map(t => <Button key={t} variant={transit === t ? 'default' : 'outline'} className="h-auto min-h-11 whitespace-normal px-2 text-xs" onClick={() => setTransit(t)}>{t}</Button>)}</div></div></div>
+          </section><Button size="lg" className="mt-5 h-14 w-full rounded-xl text-base" onClick={() => void analyze()} disabled={readingLab}>Generate blueprint <ArrowRight /></Button><p className="mt-3 text-center text-xs leading-5 text-muted-foreground">Indicative planning estimates, not a certified material specification.</p></div>
+        </div></> : <><div className="flex flex-wrap items-start justify-between gap-5"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">Your packaging blueprint / 02</span><h1 className="mt-3 font-display text-4xl text-primary md:text-5xl">Made for <i>{resultFood?.name}.</i></h1><p className="mt-3 text-sm text-muted-foreground">A thoughtful starting point for your next packaging decision.</p></div><Button variant="outline" className="rounded-full" onClick={() => setResult(null)}><ArrowLeft /> Analyze another</Button></div>
+          <div className="mt-8 grid gap-5 lg:grid-cols-[1.35fr_.65fr]"><section className="rounded-[20px] bg-primary p-7 text-primary-foreground md:p-9"><div className="flex flex-wrap items-start justify-between gap-5"><div><span className="text-xs font-bold uppercase tracking-[.17em] text-primary-foreground/65">Recommended film structure</span><h2 className="mt-5 max-w-xl font-display text-3xl leading-tight md:text-4xl">{eco ? result.ecoStructure : result.structure}</h2></div><Package className="size-8 text-primary-foreground/70" /></div><div className="mt-9 flex flex-wrap gap-2">{(eco ? ['Bio-based layers', 'Lower carbon impact', 'Heat sealable'] : result.tags).map(tag => <span key={tag} className="rounded-full border border-primary-foreground/30 px-3 py-1.5 text-xs">{tag}</span>)}</div></section>
+            <section className="flex items-center gap-6 rounded-[20px] border border-border bg-card p-7"><div className="score-ring grid size-32 shrink-0 place-items-center rounded-full p-2" style={{ '--score': `${result.score}%` } as React.CSSProperties}><div className="grid size-full place-items-center rounded-full bg-card"><div className="text-center"><strong className="text-3xl text-primary">{result.score}%</strong><span className="block text-[10px] text-muted-foreground">MATCH</span></div></div></div><div><span className="text-xs font-bold uppercase tracking-widest text-sage">Compatibility</span><p className="mt-2 font-display text-2xl text-primary">A strong fit.</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Estimated from food properties and storage conditions.</p></div></section></div>
+          <div className="mt-5 grid gap-5 lg:grid-cols-2"><section className="rounded-[20px] border border-border bg-card p-7"><h2 className="font-display text-2xl text-primary">Barrier specifications</h2><div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border">{[['Oxygen transmission', result.otr], ['Water vapour', result.wvtr], ['Film thickness', result.thickness], ['Sealability', result.seal]].map(([label, val]) => <div key={label} className="min-h-28 bg-surface p-4"><span className="text-xs text-muted-foreground">{label}</span><strong className="mt-3 block text-base text-primary sm:text-lg">{val}</strong></div>)}</div></section>
+            <section className="rounded-[20px] border border-border bg-card p-7"><div className="flex items-center justify-between gap-4"><div><span className="text-xs font-bold uppercase tracking-widest text-sage">Sustainability / 03</span><h2 className="mt-2 font-display text-2xl text-primary">The green swap</h2></div><Button role="switch" aria-checked={eco} aria-label="Use bio-based alternative" onClick={() => setEco(!eco)} variant={eco ? 'default' : 'secondary'} size="icon" className="h-10 w-16 shrink-0 rounded-full"><span className={`size-6 rounded-full bg-card shadow transition-transform ${eco ? 'translate-x-3' : '-translate-x-3'}`} /></Button></div><p className="mt-3 text-sm leading-6 text-muted-foreground">Switch to bio-based layers to compare the trade-offs.</p><div className="mt-7 grid grid-cols-2 gap-4"><div className="rounded-xl bg-secondary p-4"><Leaf className="size-5 text-sage" /><strong className="mt-3 block text-xl text-primary">{eco ? `${result.carbonSaving}%` : '—'}</strong><span className="text-xs text-muted-foreground">Est. carbon saving</span></div><div className="rounded-xl bg-muted p-4"><Thermometer className="size-5 text-sage" /><strong className="mt-3 block text-xl text-primary">{eco ? result.ecoShelfDays : result.shelfDays} days</strong><span className="text-xs text-muted-foreground">Est. shelf life</span></div></div></section></div>
+          <div className="mt-5 grid gap-5 lg:grid-cols-2"><section className="rounded-[20px] border border-border bg-card p-7"><span className="text-xs font-bold uppercase tracking-widest text-sage">B2B cost estimate</span><div className="mt-3 font-display text-4xl text-primary">{formatMoney(eco ? result.ecoCost : result.cost)}</div><p className="mt-2 text-sm text-muted-foreground">Estimated per 1,000 units · indicative only</p><div className="mt-6 border-t border-border pt-5 text-xs leading-6 text-muted-foreground">Final pricing depends on gauge, order volume, printing and supplier quotation.</div></section><section className="rounded-[20px] border border-border bg-card p-7"><span className="text-xs font-bold uppercase tracking-widest text-sage">Why this recommendation</span><h2 className="mt-2 font-display text-2xl text-primary">Decision factors</h2><div className="mt-5 space-y-4">{result.weights.map(w => <div key={w.label}><div className="flex justify-between text-xs"><span>{w.label}</span><strong>{w.value}%</strong></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-sage" style={{ width: `${w.value}%` }} /></div></div>)}</div></section></div>
+          <div className="mt-6 flex flex-wrap gap-3"><Button className="h-12 rounded-full px-6" onClick={() => setBatchDialog(true)}><QrCode /> Generate QR passport</Button><Button variant="outline" className="h-12 rounded-full px-6" onClick={() => void exportPdf()}><Download /> Export compliance PDF</Button></div><p className="mt-4 text-xs leading-5 text-muted-foreground">Illustrative model estimates, not SHAP attributions or compliance certification. Verify food-contact suitability, OTR/WVTR and shelf life with accredited testing before use.</p>
+        </>}
+    </main>}
+    {view === 'batches' && <main className="mx-auto max-w-[1280px] px-5 py-10 md:px-10 md:py-14"><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">Operations / 03</span><h1 className="mt-3 font-display text-4xl text-primary md:text-6xl">Active <i>batches.</i></h1><p className="mt-4 text-ink-soft">Track your shipments and open each packaging passport.</p>{!user ? <Empty icon={LockKeyhole} title="Your ledger, kept private." text="Sign in to create and track shipments across devices." action="Open portal" onClick={() => setPortal(true)} /> : batches.length === 0 ? <Empty icon={Package} title="No active batches yet." text="Run an analysis, then create your first shipment passport." action="Start analysis" onClick={() => go('analyzer')} /> : <div className="mt-10 grid gap-4 md:grid-cols-2 lg:grid-cols-3">{batches.map(batch => { const days = Math.max(0, Math.ceil((new Date(batch.expires_at).getTime() - Date.now()) / 86400000)); return <article key={batch.id} className="rounded-[20px] border border-border bg-card p-6"><div className="flex items-start justify-between"><span className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold text-primary">{days ? 'In transit' : 'Review expiry'}</span><QrCode className="size-5 text-sage" /></div><h2 className="mt-6 font-display text-2xl text-primary">{batch.product_name}</h2><p className="mt-2 text-sm text-muted-foreground">{batch.destination || 'Destination not set'}</p><div className="my-6 border-t border-border" /><div className="flex justify-between text-sm"><span className="text-muted-foreground">Shelf life remaining</span><strong className="text-primary">{days} days</strong></div><div className="mt-3 flex justify-between text-xs"><span className="text-muted-foreground">Dispatched</span><span>{new Date(batch.dispatched_at).toLocaleDateString('en-IN')}</span></div><Button variant="outline" className="mt-6 w-full rounded-full" onClick={() => void showPassport(batch)}>View passport <ArrowRight /></Button></article>; })}</div>}{user && analyses.length > 0 && <section className="mt-14"><h2 className="font-display text-3xl text-primary">Recent analyses</h2><div className="mt-5 divide-y divide-border border-y border-border">{analyses.slice(0, 5).map(a => <div key={a.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-4 text-sm"><span className="truncate font-semibold text-primary">{a.product_name}</span><span className="text-muted-foreground">{new Date(a.created_at).toLocaleDateString('en-IN')}</span></div>)}</div></section>}</main>}
+    {view === 'suppliers' && <main className="mx-auto max-w-[1280px] px-5 py-10 md:px-10 md:py-14"><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">Sourcing / 04</span><h1 className="mt-3 font-display text-4xl text-primary md:text-6xl">Find your <i>supplier.</i></h1><p className="mt-4 max-w-2xl text-ink-soft">A sourcing checklist for finding the right Indian packaging partner. Request current certifications and quotes directly before ordering.</p><div className="mt-10 grid gap-4 md:grid-cols-3">{[{ title: 'Barrier film converters', kind: 'PET · MetPET · LDPE', location: 'Pan-India', cost: '₹1,500–2,400', icon: Package }, { title: 'Fresh produce film makers', kind: 'BOPP · PE · Microperforation', location: 'Pan-India', cost: '₹1,200–2,000', icon: Sprout }, { title: 'Bio-based film producers', kind: 'PLA · Cellulose · Bio-PE', location: 'Pan-India', cost: '₹1,800–3,000', icon: Leaf }].map(s => <article key={s.title} className="rounded-[20px] border border-border bg-card p-6"><span className="grid size-11 place-items-center rounded-xl bg-secondary text-sage"><s.icon /></span><h2 className="mt-7 font-display text-2xl text-primary">{s.title}</h2><p className="mt-2 text-sm text-muted-foreground">{s.kind}</p><div className="mt-7 border-t border-border pt-5 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Coverage</span><span>{s.location}</span></div><div className="mt-3 flex justify-between"><span className="text-muted-foreground">Indicative / 1,000</span><strong>{s.cost}</strong></div></div></article>)}</div><div className="mt-8 rounded-xl bg-secondary p-5 text-sm leading-6 text-primary"><strong>Before you source:</strong> Ask each manufacturer for food-contact declarations, migration test reports, measured barrier data, MOQ and a written quotation. Supplier identities and verification are not available in this preview.</div></main>}
+    {view === 'xai' && <main className="mx-auto max-w-[1280px] px-5 py-10 md:px-10 md:py-14"><span className="text-xs font-bold uppercase tracking-[.2em] text-sage">Inside the model / 05</span><h1 className="mt-3 font-display text-4xl text-primary md:text-6xl">The thinking <i>behind the film.</i></h1><p className="mt-4 max-w-2xl text-ink-soft">See how the food’s properties and its journey influence the recommendation.</p><div className="mt-10 grid gap-6 lg:grid-cols-[1.2fr_.8fr]"><section className="rounded-[20px] border border-border bg-card p-7 md:p-9"><h2 className="font-display text-2xl text-primary">Feature influence</h2><p className="mt-2 text-sm text-muted-foreground">{resultFood ? `Current analysis: ${resultFood.name}` : 'Illustrative example: Chilli Pickle'}</p><div className="mt-9 space-y-7">{(result ?? recommend({ food: foods[2], temperature: 25, humidity: 60, transit: 'Regional' })).weights.map((w, i) => <div key={w.label}><div className="mb-3 flex justify-between text-sm"><span className="font-semibold text-primary">0{i + 1} · {w.label}</span><strong>{w.value}%</strong></div><div className="h-3 rounded-full bg-secondary"><div className="h-full rounded-full bg-sage transition-all duration-500" style={{ width: `${w.value}%` }} /></div></div>)}</div></section><div className="space-y-5"><section className="rounded-[20px] bg-primary p-7 text-primary-foreground"><CircleHelp className="size-7" /><h2 className="mt-5 font-display text-2xl">Why these factors?</h2><p className="mt-4 text-sm leading-7 text-primary-foreground/80">Fat can oxidize in oxygen. Dry foods lose crispness when they absorb moisture. Higher temperatures and longer journeys increase the need for protection.</p></section><p className="px-2 text-xs leading-6 text-muted-foreground">These percentages are a transparent heuristic breakdown, not SHAP values from a trained machine-learning model. They should not replace laboratory validation.</p></div></div></main>}
+    <footer className="mt-10 border-t border-border bg-primary py-9 text-primary-foreground"><div className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-between gap-5 px-5 md:px-10"><div className="flex items-center gap-2 font-display text-xl"><Leaf className="size-5" /> PackSmart <i>AI</i></div><p className="text-xs text-primary-foreground/70">Thoughtful packaging for a more resilient food future. · SIH 2026 / MoFPI</p></div></footer>
+    {portal && <Portal user={user} onClose={() => setPortal(false)} onGuest={() => { setGuest(true); setPortal(false); go('analyzer'); }} offline={offline} setOffline={setOffline} />}
+    {batchDialog && <Modal title="Create shipment passport" onClose={() => setBatchDialog(false)}><p className="mb-5 text-sm text-muted-foreground">Save this packaging choice and track its estimated shelf life.</p><label className="text-sm font-semibold text-primary">Destination<input value={destination} onChange={e => setDestination(e.target.value)} placeholder="e.g. Mumbai distribution centre" className="mt-2 h-12 w-full rounded-xl border border-border bg-background px-4 outline-none focus:border-sage" /></label><Button className="mt-6 h-12 w-full rounded-xl" disabled={saving} onClick={() => void createBatch()}>{saving ? 'Saving...' : 'Create passport'} <ArrowRight /></Button></Modal>}
+    {passport && <Modal title="Packaging passport" onClose={() => { setPassport(null); setPassportImage(''); }}><div className="text-center">{passportImage ? <img src={passportImage} alt="Shipment QR passport" width={240} height={240} className="mx-auto rounded-xl" /> : <div className="mx-auto h-60 w-60 animate-pulse rounded-xl bg-muted" />}<h3 className="mt-4 font-display text-2xl text-primary">{passport.product_name}</h3><p className="mt-2 text-sm text-muted-foreground">{passport.packaging}</p><p className="mt-3 text-xs text-muted-foreground">Best before {new Date(passport.expires_at).toLocaleDateString('en-IN')} · {passport.destination || 'Destination not set'}</p>{passportImage && <Button variant="outline" className="mt-6 rounded-full" onClick={() => { const a = document.createElement('a'); a.href = passportImage; a.download = `passport-${passport.id.slice(0,8)}.png`; a.click(); }}><Download /> Download QR</Button>}</div></Modal>}
+  </div>;
+}
+function Empty({ icon: Icon, title, text, action, onClick }: { icon: typeof Package; title: string; text: string; action: string; onClick: () => void }) { return <div className="mt-10 grid min-h-72 place-items-center rounded-[20px] border border-dashed border-border bg-card p-7 text-center"><div><Icon className="mx-auto size-9 text-sage" /><h2 className="mt-4 font-display text-2xl text-primary">{title}</h2><p className="mt-2 text-sm text-muted-foreground">{text}</p><Button className="mt-6 rounded-full px-6" onClick={onClick}>{action} <ArrowRight /></Button></div></div>; }
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) { return <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-primary/55 p-4 backdrop-blur-sm" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" aria-label={title} className="relative my-auto w-full max-w-[480px] rounded-[20px] border border-border bg-card p-6 shadow-2xl md:p-8"><div className="mb-6 flex items-start justify-between gap-4"><h2 className="font-display text-3xl text-primary">{title}</h2><Button variant="ghost" size="icon" aria-label="Close" className="shrink-0" onClick={onClose}><X /></Button></div>{children}</div></div>; }
+function Portal({ user, onClose, onGuest, offline, setOffline }: { user: User | null; onClose: () => void; onGuest: () => void; offline: boolean; setOffline: (v: boolean) => void }) {
+  const [tab, setTab] = useState<'enterprise' | 'farmer' | 'guest'>('enterprise');
+  const [signup, setSignup] = useState(false); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [name, setName] = useState('');
+  const [phone, setPhone] = useState(''); const [otp, setOtp] = useState(''); const [sent, setSent] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
+  async function submitEmail(e: React.FormEvent) { e.preventDefault(); setBusy(true); setMessage('');
+    if (signup) { const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin, data: { display_name: name, account_type: 'enterprise' } } }); if (error) setMessage(error.message); else if (!data.session) setMessage('Check your email to confirm your account, then sign in.'); else onClose(); }
+    else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) setMessage(error.message); else onClose(); } setBusy(false); }
+  async function submitPhone(e: React.FormEvent) { e.preventDefault(); setBusy(true); setMessage(''); const normalized = phone.replace(/\s/g, '');
+    if (!sent) { const { error } = await supabase.auth.signInWithOtp({ phone: normalized.startsWith('+') ? normalized : `+91${normalized}`, options: { data: { account_type: 'farmer' } } }); if (error) setMessage(error.message); else { setSent(true); setMessage('A verification code has been sent to your phone.'); } }
+    else { const { error } = await supabase.auth.verifyOtp({ phone: normalized.startsWith('+') ? normalized : `+91${normalized}`, token: otp, type: 'sms' }); if (error) setMessage(error.message); else onClose(); } setBusy(false); }
+  async function signOut() { await supabase.auth.signOut(); onClose(); }
+  return <Modal title={user ? 'Your portal' : 'Welcome to PackSmart'} onClose={onClose}>{user ? <div><div className="rounded-xl bg-muted p-5"><UserRound className="size-6 text-sage" /><p className="mt-3 text-sm text-muted-foreground">Signed in as</p><strong className="block break-all text-primary">{user.email || user.phone}</strong></div><Button variant="outline" className="mt-5 w-full rounded-full" onClick={() => void signOut()}>Sign out <ArrowRight /></Button></div> : <><p className="-mt-2 mb-5 text-sm text-muted-foreground">Choose how you’d like to continue.</p><div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">{[{ id: 'enterprise', label: 'Enterprise' }, { id: 'farmer', label: 'Farmer / FPO' }, { id: 'guest', label: 'Guest' }].map(t => <Button key={t.id} size="sm" variant={tab === t.id ? 'secondary' : 'ghost'} className={`h-10 rounded-lg px-1 text-xs ${tab === t.id ? 'bg-card shadow-sm' : ''}`} onClick={() => { setTab(t.id as typeof tab); setMessage(''); }}>{t.label}</Button>)}</div>
+    {tab === 'enterprise' && <form onSubmit={e => void submitEmail(e)} className="mt-6 space-y-4">{signup && <label className="block text-xs font-semibold text-primary">Display name<input required value={name} onChange={e => setName(e.target.value)} className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-4 text-sm" placeholder="Your name" /></label>}<label className="block text-xs font-semibold text-primary">Work email<input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-4 text-sm" placeholder="you@company.com" /></label><label className="block text-xs font-semibold text-primary">Password<input required minLength={6} type="password" value={password} onChange={e => setPassword(e.target.value)} className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-4 text-sm" placeholder="At least 6 characters" /></label><Button type="submit" disabled={busy} className="h-12 w-full rounded-xl">{busy ? 'Please wait...' : signup ? 'Create account' : 'Sign in'} <ArrowRight /></Button><Button type="button" variant="ghost" className="w-full text-sage" onClick={() => { setSignup(!signup); setMessage(''); }}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Button></form>}
+    {tab === 'farmer' && <form onSubmit={e => void submitPhone(e)} className="mt-6 space-y-4"><label className="block text-xs font-semibold text-primary">Mobile number<input required type="tel" value={phone} onChange={e => setPhone(e.target.value)} className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-4 text-sm" placeholder="+91 98765 43210" /></label>{sent && <label className="block text-xs font-semibold text-primary">6-digit verification code<input required inputMode="numeric" value={otp} onChange={e => setOtp(e.target.value)} className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-4 text-sm" placeholder="Enter code" /></label>}<Button type="submit" disabled={busy} className="h-12 w-full rounded-xl">{busy ? 'Please wait...' : sent ? 'Verify & continue' : 'Send code'} <ArrowRight /></Button><label className="flex cursor-pointer items-center justify-between rounded-xl bg-muted p-4 text-sm text-primary"><span>Offline sync mode</span><input type="checkbox" checked={offline} onChange={e => setOffline(e.target.checked)} className="size-4 accent-primary" /></label><p className="text-xs leading-5 text-muted-foreground">Offline saving is not available yet; connection is required to save or sync work.</p></form>}
+    {tab === 'guest' && <div className="mt-6"><div className="rounded-xl bg-muted p-5"><Sparkles className="size-6 text-sage" /><h3 className="mt-3 font-display text-xl text-primary">Explore freely.</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">Analyze products without an account. Sign in later to save shipments and passports.</p></div><Button className="mt-5 h-12 w-full rounded-xl" onClick={onGuest}>Continue as guest <ArrowRight /></Button></div>}
+    {message && <p role="status" className="mt-4 rounded-lg bg-secondary p-3 text-sm text-primary">{message}</p>}
+  </>}</Modal>;
 }
