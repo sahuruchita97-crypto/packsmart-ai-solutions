@@ -20,7 +20,7 @@ export function recommend({ food, temperature, humidity, transit }: Inputs) {
     { label: 'Temperature & transit', value: 0 },
   ];
   weights[2].value = 100 - weights[0].value - weights[1].value;
-  const score = Math.max(71, Math.min(97, Math.round(97 - Math.max(0, temperature - 25) * .45 - Math.max(0, humidity - 60) * .12 - (transit === 'Long distance' ? 4 : 0)));
+  const score = Math.max(71, Math.min(97, Math.round(97 - Math.max(0, temperature - 25) * .45 - Math.max(0, humidity - 60) * .12 - (transit === 'Long distance' ? 4 : 0))));
   const shelfDays = Math.max(3, Math.round(food.shelfDays * (1 + (produce ? .22 : .32)) * (1 - Math.max(0, temperature - 25) * .022)));
   const cost = produce ? 1420 : food.fat > 15 ? 1850 : 1650;
   return {
